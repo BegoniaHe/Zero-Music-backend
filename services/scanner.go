@@ -21,6 +21,7 @@ type MusicScanner struct {
 	mu               sync.RWMutex
 	lastScan         time.Time
 	cacheTTL         time.Duration
+	lastDirModTime   time.Time
 }
 
 // NewMusicScanner 创建并返回一个新的 MusicScanner 实例。
@@ -40,15 +41,11 @@ func NewMusicScanner(directory string, supportedFormats []string, cacheTTLMinute
 	}
 }
 
-// Scan 扫描音乐目录并返回歌曲列表。
-// 为了提高性能，此函数会缓存扫描结果。
-// 如果缓存有效，它将返回缓存的数据；否则，它将执行新的扫描。
+// Scan 扫描音乐目录并返回歌曲列表（带缓存）。
 func (s *MusicScanner) Scan(ctx context.Context) ([]*models.Song, error) {
 	s.mu.RLock()
-	// 检查缓存是否仍然有效。
-	if time.Since(s.lastScan) < s.cacheTTL && len(s.songs) > 0 {
-		songs := make([]*models.Song, len(s.songs))
-		copy(songs, s.songs)
+	if s.canServeFromCacheLocked() {
+		songs := cloneSongs(s.songs)
 		s.mu.RUnlock()
 		return songs, nil
 	}
@@ -57,30 +54,44 @@ func (s *MusicScanner) Scan(ctx context.Context) ([]*models.Song, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 在获取写锁后再次检查缓存，以避免在等待锁期间其他 goroutine 已刷新缓存。
-	if time.Since(s.lastScan) < s.cacheTTL && len(s.songs) > 0 {
-		songs := make([]*models.Song, len(s.songs))
-		copy(songs, s.songs)
-		return songs, nil
+	if s.canServeFromCacheLocked() {
+		return cloneSongs(s.songs), nil
 	}
 
-	// 执行实际的扫描操作。
 	return s.scanInternal(ctx)
 }
 
-// scanInternal 是实际的扫描逻辑。
-// 调用此函数前必须获取写锁。
-func (s *MusicScanner) scanInternal(ctx context.Context) ([]*models.Song, error) {
-	s.songs = make([]*models.Song, 0)
-	s.songIndex = make(map[string]*models.Song)
+func (s *MusicScanner) canServeFromCacheLocked() bool {
+	if len(s.songs) == 0 {
+		return false
+	}
+	if time.Since(s.lastScan) >= s.cacheTTL {
+		return false
+	}
+	dirInfo, err := os.Stat(s.directory)
+	if err != nil {
+		return false
+	}
+	if dirInfo.ModTime().After(s.lastDirModTime) {
+		return false
+	}
+	return true
+}
 
-	// 确保音乐目录存在。
-	if _, err := os.Stat(s.directory); os.IsNotExist(err) {
-		return nil, fmt.Errorf("音乐目录不存在: %s", s.directory)
+// scanInternal 是实际的扫描逻辑。调用此函数前必须获取写锁。
+func (s *MusicScanner) scanInternal(ctx context.Context) ([]*models.Song, error) {
+	dirInfo, err := os.Stat(s.directory)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("音乐目录不存在: %s", s.directory)
+		}
+		return nil, fmt.Errorf("音乐目录不可访问: %w", err)
 	}
 
-	// 遍历目录下的所有文件。
-	err := filepath.Walk(s.directory, func(path string, info os.FileInfo, err error) error {
+	newSongs := make([]*models.Song, 0)
+	newIndex := make(map[string]*models.Song)
+
+	err = filepath.Walk(s.directory, func(path string, info os.FileInfo, walkErr error) error {
 		// 检查 context 是否被取消
 		select {
 		case <-ctx.Done():
@@ -88,22 +99,20 @@ func (s *MusicScanner) scanInternal(ctx context.Context) ([]*models.Song, error)
 		default:
 		}
 
-		if err != nil {
-			return err
+		if walkErr != nil {
+			return walkErr
 		}
 
-		// 忽略目录。
 		if info.IsDir() {
 			return nil
 		}
 
-		// 检查文件扩展名是否受支持。
 		ext := strings.ToLower(filepath.Ext(path))
 		for _, supported := range s.supportedFormats {
 			if ext == strings.ToLower(supported) {
 				song := models.NewSong(path, info.Size())
-				s.songs = append(s.songs, song)
-				s.songIndex[song.ID] = song
+				newSongs = append(newSongs, song)
+				newIndex[song.ID] = song
 				break
 			}
 		}
@@ -115,8 +124,12 @@ func (s *MusicScanner) scanInternal(ctx context.Context) ([]*models.Song, error)
 		return nil, fmt.Errorf("扫描目录时出错: %v", err)
 	}
 
+	s.songs = newSongs
+	s.songIndex = newIndex
 	s.lastScan = time.Now()
-	return s.songs, nil
+	s.lastDirModTime = dirInfo.ModTime()
+
+	return cloneSongs(newSongs), nil
 }
 
 // Refresh 强制执行一次新的扫描,并刷新歌曲列表缓存。
@@ -129,22 +142,10 @@ func (s *MusicScanner) Refresh(ctx context.Context) error {
 }
 
 // GetSongs 返回当前缓存的歌曲列表的深度拷贝。
-// 使用深度拷贝避免外部修改影响缓存数据。
 func (s *MusicScanner) GetSongs() []*models.Song {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	// 创建深度拷贝
-	songs := make([]*models.Song, len(s.songs))
-	for i, song := range s.songs {
-		if song != nil {
-			// 拷贝 Song 结构体
-			copiedSong := *song
-			// 拷贝 SupportedFormats 切片（如果 Song 中有的话）
-			songs[i] = &copiedSong
-		}
-	}
-	return songs
+	return cloneSongs(s.songs)
 }
 
 // GetSongCount 返回当前缓存的歌曲数量。
@@ -166,4 +167,19 @@ func (s *MusicScanner) GetSongByID(id string) *models.Song {
 	}
 	copiedSong := *song
 	return &copiedSong
+}
+
+func cloneSongs(src []*models.Song) []*models.Song {
+	if len(src) == 0 {
+		return []*models.Song{}
+	}
+	dst := make([]*models.Song, len(src))
+	for i, song := range src {
+		if song == nil {
+			continue
+		}
+		copied := *song
+		dst[i] = &copied
+	}
+	return dst
 }

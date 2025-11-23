@@ -129,9 +129,10 @@ func (h *StreamHandler) StreamAudio(c *gin.Context) {
 		return
 	}
 
-	// 确保请求的路径位于配置的音乐目录内。
-	if !strings.HasPrefix(cleanPath, h.musicDirAbs) {
-		logger.WithRequestID(requestID).Warnf("安全警告: 拒绝访问 - 路径 %s 不在音乐目录 %s 内", cleanPath, h.musicDirAbs)
+	// 确保请求的路径位于配置的音乐目录内，使用更严格的路径验证防止目录遍历攻击。
+	relPath, err := filepath.Rel(h.musicDirAbs, cleanPath)
+	if err != nil || strings.HasPrefix(relPath, "..") || filepath.IsAbs(relPath) {
+		logger.WithRequestID(requestID).Warnf("安全警告: 路径遍历尝试 - 路径 %s 不在音乐目录 %s 内", cleanPath, h.musicDirAbs)
 		c.JSON(http.StatusForbidden, NewForbiddenError("拒绝访问"))
 		return
 	}

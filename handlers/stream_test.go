@@ -15,7 +15,7 @@ import (
 
 // setupStreamTestEnv 初始化一个用于音频流处理器测试的环境。
 // 它会创建一个临时的 MP3 文件并设置好 Gin 路由器。
-func setupStreamTestEnv(t *testing.T) (*gin.Engine, string, string) {
+func setupStreamTestEnv(t *testing.T, cfgModifiers ...func(*config.Config)) (*gin.Engine, string, string) {
 	gin.SetMode(gin.TestMode)
 
 	tmpDir := t.TempDir()
@@ -36,6 +36,10 @@ func setupStreamTestEnv(t *testing.T) (*gin.Engine, string, string) {
 			SupportedFormats: []string{".mp3"},
 			CacheTTLMinutes:  5,
 		},
+	}
+
+	for _, modify := range cfgModifiers {
+		modify(cfg)
 	}
 
 	// 创建扫描器。
@@ -184,5 +188,22 @@ func TestStreamAudio_InvalidRange(t *testing.T) {
 				t.Errorf("期望状态码 400 或 416, 得到 %d", w.Code)
 			}
 		})
+	}
+}
+
+// TestStreamAudio_RangeTooLarge 确认当 Range 请求超过限制时会被拒绝。
+func TestStreamAudio_RangeTooLarge(t *testing.T) {
+	router, _, _ := setupStreamTestEnv(t, func(cfg *config.Config) {
+		cfg.Server.MaxRangeSize = 4
+	})
+	songID := getSongID(t, router)
+
+	req, _ := http.NewRequest("GET", "/api/stream/"+songID, nil)
+	req.Header.Set("Range", "bytes=0-10")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("期望状态码 400, 得到 %d", w.Code)
 	}
 }

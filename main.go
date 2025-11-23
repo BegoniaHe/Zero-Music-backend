@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 	"zero-music/config"
 	"zero-music/handlers"
 	"zero-music/logger"
@@ -43,8 +44,7 @@ func ProvideParams() *Params {
 func ProvideConfig(params *Params) (*config.Config, error) {
 	cfg, err := config.Load(params.ConfigPath)
 	if err != nil {
-		logger.Warnf("加载配置文件失败，将使用默认配置: %v", err)
-		return config.GetDefaultConfig(), nil
+		return nil, fmt.Errorf("加载配置失败: %w", err)
 	}
 	return cfg, nil
 }
@@ -133,15 +133,22 @@ func ProvideRouter(
 // ProvideHTTPServer 提供 HTTP 服务器
 func ProvideHTTPServer(cfg *config.Config, router *gin.Engine) *http.Server {
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	readTimeout := time.Duration(cfg.Server.ReadTimeoutSeconds) * time.Second
+	writeTimeout := time.Duration(cfg.Server.WriteTimeoutSeconds) * time.Second
+	idleTimeout := time.Duration(cfg.Server.IdleTimeoutSeconds) * time.Second
 	return &http.Server{
-		Addr:    addr,
-		Handler: router,
+		Addr:              addr,
+		Handler:           router,
+		ReadTimeout:       readTimeout,
+		ReadHeaderTimeout: readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
 	}
 }
 
 // initLogger 初始化日志系统
 func initLogger(lc fx.Lifecycle, params *Params) error {
-	logFileHandle, err := logger.Init(params.LogFile)
+	logCloser, err := logger.Init(params.LogFile)
 	if err != nil {
 		logger.Warnf("日志文件初始化警告: %v", err)
 	}
@@ -152,11 +159,12 @@ func initLogger(lc fx.Lifecycle, params *Params) error {
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {
-			if logFileHandle != nil {
-				logger.Info("正在关闭日志文件...")
-				if err := logFileHandle.Close(); err != nil {
-					logger.Errorf("关闭日志文件时出错: %v", err)
+			if logCloser != nil {
+				logger.Info("正在关闭日志输出...")
+				if err := logCloser.Close(); err != nil {
+					logger.Errorf("关闭日志输出时出错: %v", err)
 				}
+			}
 			return nil
 		},
 	})
@@ -181,7 +189,10 @@ func startHTTPServer(lc fx.Lifecycle, srv *http.Server, cfg *config.Config) {
 		},
 		OnStop: func(ctx context.Context) error {
 			logger.Info("正在关闭服务器...")
-			if err := srv.Shutdown(ctx); err != nil {
+			shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeoutSeconds) * time.Second
+			shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
+			defer cancel()
+			if err := srv.Shutdown(shutdownCtx); err != nil {
 				logger.Errorf("服务器强制关闭: %v", err)
 				return err
 			}

@@ -26,15 +26,15 @@ func NewNotFoundError(resource string) *APIError {
 }
 
 // NewInternalError 创建一个表示内部服务器错误的 APIError。
-// 在生产环境中（ZERO_MUSIC_ENV=production），不会暴露错误详情。
+// 默认不暴露错误详情，仅在明确启用调试模式时显示（ZERO_MUSIC_DEBUG=true）。
 func NewInternalError(err error) *APIError {
 	apiErr := &APIError{
 		Code:    "INTERNAL_ERROR",
 		Message: "内部服务器错误",
 	}
 	
-	// 仅在非生产环境中暴露错误详情
-	if os.Getenv("ZERO_MUSIC_ENV") != "production" {
+	// 仅在明确启用调试模式时暴露错误详情，默认不暴露以提高安全性
+	if os.Getenv("ZERO_MUSIC_DEBUG") == "true" {
 		apiErr.Details = err.Error()
 	}
 	

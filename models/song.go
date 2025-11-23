@@ -61,20 +61,22 @@ func NewSong(filePath string, fileSize int64) *Song {
 	// 尝试从 ID3 标签读取元数据
 	file, err := os.Open(filePath)
 	if err == nil {
-		metadata, metaErr := tag.ReadFrom(file)
-		file.Close() // 立即关闭文件，避免在循环中积累文件句柄
-		if metaErr == nil {
-			if metadata.Title() != "" {
-				title = metadata.Title()
+		func() {
+			defer file.Close()
+			metadata, metaErr := tag.ReadFrom(file)
+			if metaErr == nil {
+				if metadata.Title() != "" {
+					title = metadata.Title()
+				}
+				if metadata.Artist() != "" {
+					artist = metadata.Artist()
+				}
+				if metadata.Album() != "" {
+					album = metadata.Album()
+				}
+				// tag 库不直接提供时长，保持为 0
 			}
-			if metadata.Artist() != "" {
-				artist = metadata.Artist()
-			}
-			if metadata.Album() != "" {
-				album = metadata.Album()
-			}
-			// tag 库不直接提供时长，保持为 0
-		}
+		}()
 	}
 
 	return &Song{
