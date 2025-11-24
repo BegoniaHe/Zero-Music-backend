@@ -58,28 +58,7 @@ func NewSong(filePath string, fileSize int64) *Song {
 	album := "Unknown"
 	duration := 0
 
-	// 尝试从 ID3 标签读取元数据
-	file, err := os.Open(filePath)
-	if err == nil {
-		func() {
-			defer file.Close()
-			metadata, metaErr := tag.ReadFrom(file)
-			if metaErr == nil {
-				if metadata.Title() != "" {
-					title = metadata.Title()
-				}
-				if metadata.Artist() != "" {
-					artist = metadata.Artist()
-				}
-				if metadata.Album() != "" {
-					album = metadata.Album()
-				}
-				// tag 库不直接提供时长，保持为 0
-			}
-		}()
-	}
-
-	return &Song{
+	song := &Song{
 		ID:       generateID(filePath),
 		Title:    title,
 		Artist:   artist,
@@ -91,6 +70,33 @@ func NewSong(filePath string, fileSize int64) *Song {
 		AddedAt:  addedAt,
 		Format:   strings.ToLower(ext),
 	}
+
+	return song
+}
+
+// UpdateMetadata 尝试从文件中读取 ID3 标签等元数据并更新歌曲信息。
+func (s *Song) UpdateMetadata() {
+	file, err := os.Open(s.FilePath)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	metadata, metaErr := tag.ReadFrom(file)
+	if metaErr != nil {
+		return
+	}
+
+	if metadata.Title() != "" {
+		s.Title = metadata.Title()
+	}
+	if metadata.Artist() != "" {
+		s.Artist = metadata.Artist()
+	}
+	if metadata.Album() != "" {
+		s.Album = metadata.Album()
+	}
+	// tag 库不直接提供时长，保持为 0
 }
 
 // generateID 使用文件路径的 SHA256 哈希值的前 16 字节生成一个唯一的歌曲 ID。

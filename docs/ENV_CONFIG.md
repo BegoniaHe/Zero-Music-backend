@@ -725,7 +725,7 @@ export ZERO_MUSIC_SERVER_WRITE_TIMEOUT_SECONDS=120
 echo $ZERO_MUSIC_SERVER_PORT
 
 # 确保使用 export
-export ZERO_MUSIC_SERVER_PORT=8080  # ✅
+export ZERO_MUSIC_SERVER_PORT=8080  
 ZERO_MUSIC_SERVER_PORT=8080         # 不会传递给子进程
 
 # 查看所有 ZERO_MUSIC 相关的环境变量
@@ -755,10 +755,10 @@ sudo -u zeromusic ls $ZERO_MUSIC_MUSIC_DIRECTORY
 
 ```bash
 # 确保环境变量正确传递
-docker run -e ZERO_MUSIC_DEBUG=false ...  # ✅
+docker run -e ZERO_MUSIC_DEBUG=false ...  # 
 
 # 或使用 --env-file
-docker run --env-file .env ...  # ✅
+docker run --env-file .env ...  # 
 
 # 检查容器内环境变量
 docker exec zero-music env | grep ZERO_MUSIC

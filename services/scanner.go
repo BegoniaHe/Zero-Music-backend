@@ -91,7 +91,7 @@ func (s *MusicScanner) scanInternal(ctx context.Context) ([]*models.Song, error)
 	newSongs := make([]*models.Song, 0)
 	newIndex := make(map[string]*models.Song)
 
-	err = filepath.Walk(s.directory, func(path string, info os.FileInfo, walkErr error) error {
+	err = filepath.WalkDir(s.directory, func(path string, d os.DirEntry, walkErr error) error {
 		// 检查 context 是否被取消
 		select {
 		case <-ctx.Done():
@@ -100,17 +100,25 @@ func (s *MusicScanner) scanInternal(ctx context.Context) ([]*models.Song, error)
 		}
 
 		if walkErr != nil {
-			return walkErr
+			// 记录具体的路径错误
+			return fmt.Errorf("访问路径 %s 失败: %w", path, walkErr)
 		}
 
-		if info.IsDir() {
+		if d.IsDir() {
 			return nil
 		}
 
 		ext := strings.ToLower(filepath.Ext(path))
 		for _, supported := range s.supportedFormats {
 			if ext == strings.ToLower(supported) {
+				info, err := d.Info()
+				if err != nil {
+					// 记录获取文件信息失败，但不中断扫描
+					fmt.Printf("获取文件信息失败 %s: %v\n", path, err)
+					return nil
+				}
 				song := models.NewSong(path, info.Size())
+				song.UpdateMetadata()
 				newSongs = append(newSongs, song)
 				newIndex[song.ID] = song
 				break

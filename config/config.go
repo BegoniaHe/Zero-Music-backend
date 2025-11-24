@@ -113,8 +113,6 @@ func ensureDefaults(cfg *Config) {
 
 // applyEnvOverrides 使用环境变量覆盖配置。
 func applyEnvOverrides(cfg *Config) {
-	ensureDefaults(cfg)
-
 	if host := os.Getenv("ZERO_MUSIC_SERVER_HOST"); host != "" {
 		cfg.Server.Host = host
 	}

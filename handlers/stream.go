@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"zero-music/config"
@@ -17,11 +16,6 @@ import (
 	"zero-music/services"
 
 	"github.com/gin-gonic/gin"
-)
-
-var (
-	// validIDPatternStream 验证歌曲 ID 是否为有效的 SHA256 哈希（32 字节十六进制）
-	validIDPatternStream = regexp.MustCompile(models.ValidIDPattern())
 )
 
 // getMimeType 根据文件扩展名返回对应的 MIME 类型。
@@ -90,36 +84,28 @@ func (h *StreamHandler) StreamAudio(c *gin.Context) {
 	requestID := middleware.GetRequestID(c)
 
 	// 验证 ID 格式，确保是有效的 SHA256 哈希格式，防止路径遍历攻击。
-	if !validIDPatternStream.MatchString(id) {
+	if !models.ValidIDRegex.MatchString(id) {
 		logger.WithRequestID(requestID).Warnf("无效的歌曲 ID 格式: %s", id)
 		c.JSON(http.StatusBadRequest, NewBadRequestError("无效的歌曲 ID 格式"))
 		return
 	}
 
-	// 扫描音乐文件以验证歌曲是否存在。
-	songs, err := h.scanner.Scan(c.Request.Context())
+	// 先执行扫描以确保缓存是最新的。
+	_, err := h.scanner.Scan(c.Request.Context())
 	if err != nil {
 		logger.WithRequestID(requestID).Errorf("扫描音乐文件失败: %v", err)
 		c.JSON(http.StatusInternalServerError, NewInternalError(err))
 		return
 	}
 
-	// 查找歌曲并获取其文件路径。
-	var songPath string
-	found := false
-	for _, song := range songs {
-		if song.ID == id {
-			songPath = song.FilePath
-			found = true
-			break
-		}
-	}
-
-	if !found {
+	// 使用索引快速查找歌曲。
+	song := h.scanner.GetSongByID(id)
+	if song == nil {
 		logger.WithRequestID(requestID).Warnf("歌曲未找到: %s", id)
 		c.JSON(http.StatusNotFound, NewNotFoundError("歌曲"))
 		return
 	}
+	songPath := song.FilePath
 
 	// 验证文件路径的安全性。
 	cleanPath, err := filepath.Abs(songPath)

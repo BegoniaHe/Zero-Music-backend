@@ -2,19 +2,12 @@ package handlers
 
 import (
 	"net/http"
-	"regexp"
 	"zero-music/logger"
 	"zero-music/middleware"
 	"zero-music/models"
 	"zero-music/services"
 
 	"github.com/gin-gonic/gin"
-)
-
-var (
-	// validIDPattern 验证歌曲 ID 是否为有效的 SHA256 哈希（32 字节十六进制，即 64 个字符）
-	// 注意：generateID 函数使用前 16 字节，因此是 32 个十六进制字符
-	validIDPattern = regexp.MustCompile(models.ValidIDPattern())
 )
 
 // PlaylistHandler 负责处理与播放列表相关的 API 请求。
@@ -71,7 +64,7 @@ func (h *PlaylistHandler) GetSongByID(c *gin.Context) {
 	requestID := middleware.GetRequestID(c)
 
 	// 验证 ID 格式，确保是有效的 SHA256 哈希格式，防止路径遍历。
-	if !validIDPattern.MatchString(id) {
+	if !models.ValidIDRegex.MatchString(id) {
 		logger.WithRequestID(requestID).Warnf("无效的歌曲 ID 格式: %s", id)
 		c.JSON(http.StatusBadRequest, NewBadRequestError("无效的歌曲 ID 格式"))
 		return

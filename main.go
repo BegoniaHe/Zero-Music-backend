@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 	"zero-music/config"
 	"zero-music/handlers"
@@ -68,11 +67,17 @@ func ProvideStreamHandler(scanner services.Scanner, cfg *config.Config) *handler
 	return handlers.NewStreamHandler(scanner, cfg)
 }
 
+// ProvideSystemHandler 提供系统处理器
+func ProvideSystemHandler(cfg *config.Config) *handlers.SystemHandler {
+	return handlers.NewSystemHandler(cfg)
+}
+
 // ProvideRouter 提供 Gin 路由器
 func ProvideRouter(
 	cfg *config.Config,
 	playlistHandler *handlers.PlaylistHandler,
 	streamHandler *handlers.StreamHandler,
+	systemHandler *handlers.SystemHandler,
 ) *gin.Engine {
 	router := gin.Default()
 
@@ -80,41 +85,10 @@ func ProvideRouter(
 	router.Use(middleware.RequestID())
 
 	// 健康检查端点
-	router.GET("/health", func(c *gin.Context) {
-		// 检查音乐目录是否可访问。
-		musicDirAccessible := true
-		if _, err := os.Stat(cfg.Music.Directory); err != nil {
-			musicDirAccessible = false
-		}
-
-		status := "ok"
-		httpStatus := http.StatusOK
-		if !musicDirAccessible {
-			status = "degraded"
-			httpStatus = http.StatusServiceUnavailable
-		}
-
-		c.JSON(httpStatus, gin.H{
-			"status":               status,
-			"message":              "zero music服务器正在运行",
-			"music_dir_accessible": musicDirAccessible,
-			"music_directory":      cfg.Music.Directory,
-		})
-	})
+	router.GET("/health", systemHandler.HealthCheck)
 
 	// API 根端点
-	router.GET("/", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"name":    "zero music API",
-			"version": "1.0.0",
-			"endpoints": []string{
-				"GET /health - 健康检查",
-				"GET /api/songs - 获取所有歌曲列表",
-				"GET /api/song/:id - 获取指定歌曲信息",
-				"GET /api/stream/:id - 流式传输音频",
-			},
-		})
-	})
+	router.GET("/", systemHandler.APIIndex)
 
 	// API 路由组
 	api := router.Group("/api")
@@ -211,6 +185,7 @@ func main() {
 			ProvideScanner,
 			ProvidePlaylistHandler,
 			ProvideStreamHandler,
+			ProvideSystemHandler,
 			ProvideRouter,
 			ProvideHTTPServer,
 		),
