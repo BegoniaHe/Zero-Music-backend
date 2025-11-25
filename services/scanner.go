@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"zero-music/logger"
 	"zero-music/models"
 )
 
@@ -43,8 +44,17 @@ func NewMusicScanner(directory string, supportedFormats []string, cacheTTLMinute
 
 // Scan 扫描音乐目录并返回歌曲列表（带缓存）。
 func (s *MusicScanner) Scan(ctx context.Context) ([]*models.Song, error) {
+	// 先在锁外获取目录信息，减少持锁时间
+	dirInfo, err := os.Stat(s.directory)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("音乐目录不存在: %s", s.directory)
+		}
+		return nil, fmt.Errorf("音乐目录不可访问: %w", err)
+	}
+
 	s.mu.RLock()
-	if s.canServeFromCacheLocked() {
+	if s.canServeFromCacheWithDirInfo(dirInfo) {
 		songs := cloneSongs(s.songs)
 		s.mu.RUnlock()
 		return songs, nil
@@ -54,22 +64,20 @@ func (s *MusicScanner) Scan(ctx context.Context) ([]*models.Song, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.canServeFromCacheLocked() {
+	// 双重检查
+	if s.canServeFromCacheWithDirInfo(dirInfo) {
 		return cloneSongs(s.songs), nil
 	}
 
-	return s.scanInternal(ctx)
+	return s.scanInternal(ctx, dirInfo)
 }
 
-func (s *MusicScanner) canServeFromCacheLocked() bool {
+// canServeFromCacheWithDirInfo 检查是否可以从缓存返回（使用预先获取的目录信息）
+func (s *MusicScanner) canServeFromCacheWithDirInfo(dirInfo os.FileInfo) bool {
 	if len(s.songs) == 0 {
 		return false
 	}
 	if time.Since(s.lastScan) >= s.cacheTTL {
-		return false
-	}
-	dirInfo, err := os.Stat(s.directory)
-	if err != nil {
 		return false
 	}
 	if dirInfo.ModTime().After(s.lastDirModTime) {
@@ -79,19 +87,12 @@ func (s *MusicScanner) canServeFromCacheLocked() bool {
 }
 
 // scanInternal 是实际的扫描逻辑。调用此函数前必须获取写锁。
-func (s *MusicScanner) scanInternal(ctx context.Context) ([]*models.Song, error) {
-	dirInfo, err := os.Stat(s.directory)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("音乐目录不存在: %s", s.directory)
-		}
-		return nil, fmt.Errorf("音乐目录不可访问: %w", err)
-	}
+func (s *MusicScanner) scanInternal(ctx context.Context, dirInfo os.FileInfo) ([]*models.Song, error) {
 
 	newSongs := make([]*models.Song, 0)
 	newIndex := make(map[string]*models.Song)
 
-	err = filepath.WalkDir(s.directory, func(path string, d os.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(s.directory, func(path string, d os.DirEntry, walkErr error) error {
 		// 检查 context 是否被取消
 		select {
 		case <-ctx.Done():
@@ -114,7 +115,7 @@ func (s *MusicScanner) scanInternal(ctx context.Context) ([]*models.Song, error)
 				info, err := d.Info()
 				if err != nil {
 					// 记录获取文件信息失败，但不中断扫描
-					fmt.Printf("获取文件信息失败 %s: %v\n", path, err)
+					logger.Warnf("获取文件信息失败 %s: %v", path, err)
 					return nil
 				}
 				song := models.NewSong(path, info.Size())
@@ -142,10 +143,19 @@ func (s *MusicScanner) scanInternal(ctx context.Context) ([]*models.Song, error)
 
 // Refresh 强制执行一次新的扫描,并刷新歌曲列表缓存。
 func (s *MusicScanner) Refresh(ctx context.Context) error {
+	// 在锁外获取目录信息
+	dirInfo, err := os.Stat(s.directory)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("音乐目录不存在: %s", s.directory)
+		}
+		return fmt.Errorf("音乐目录不可访问: %w", err)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err := s.scanInternal(ctx)
+	_, err = s.scanInternal(ctx, dirInfo)
 	return err
 }
 

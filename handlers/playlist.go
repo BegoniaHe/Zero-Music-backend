@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"zero-music/logger"
 	"zero-music/middleware"
-	"zero-music/models"
 	"zero-music/services"
 
 	"github.com/gin-gonic/gin"
@@ -64,17 +63,7 @@ func (h *PlaylistHandler) GetSongByID(c *gin.Context) {
 	requestID := middleware.GetRequestID(c)
 
 	// 验证 ID 格式，确保是有效的 SHA256 哈希格式，防止路径遍历。
-	if !models.ValidIDRegex.MatchString(id) {
-		logger.WithRequestID(requestID).Warnf("无效的歌曲 ID 格式: %s", id)
-		c.JSON(http.StatusBadRequest, NewBadRequestError("无效的歌曲 ID 格式"))
-		return
-	}
-
-	// 先执行扫描以确保缓存是最新的。
-	_, err := h.scanner.Scan(c.Request.Context())
-	if err != nil {
-		logger.WithRequestID(requestID).Errorf("扫描音乐文件失败: %v", err)
-		c.JSON(http.StatusInternalServerError, NewInternalError(err))
+	if !ValidateSongID(c, id) {
 		return
 	}
 

@@ -3,6 +3,7 @@ package middleware
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"time"
 	"zero-music/logger"
 
@@ -23,7 +24,9 @@ func generateRequestID() string {
 	b := make([]byte, RequestIDByteLength)
 	if _, err := rand.Read(b); err != nil {
 		// 如果随机数生成失败，使用时间戳作为备选方案
-		return hex.EncodeToString([]byte(time.Now().String()))[:32]
+		// 使用 UnixNano 确保唯一性，并格式化为固定长度的十六进制字符串
+		timestamp := time.Now().UnixNano()
+		return fmt.Sprintf("%032x", timestamp)
 	}
 	return hex.EncodeToString(b)
 }

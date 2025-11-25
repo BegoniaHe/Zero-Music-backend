@@ -8,6 +8,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	// APIName 是 API 的名称。
+	APIName = "zero music API"
+	// APIVersion 是 API 的版本号。
+	// 可通过构建时 -ldflags 覆盖，例如：
+	// go build -ldflags "-X zero-music/handlers.APIVersion=1.2.3"
+	APIVersion = "1.0.0"
+)
+
 // SystemHandler 负责处理与系统相关的 API 请求。
 type SystemHandler struct {
 	cfg *config.Config
@@ -45,9 +54,9 @@ func (h *SystemHandler) HealthCheck(c *gin.Context) {
 
 // APIIndex 处理根请求并列出可用的端点。
 func (h *SystemHandler) APIIndex(c *gin.Context) {
-	c.JSON(200, gin.H{
-		"name":    "zero music API",
-		"version": "1.0.0",
+	c.JSON(http.StatusOK, gin.H{
+		"name":    APIName,
+		"version": APIVersion,
 		"endpoints": []string{
 			"GET /health - 健康检查",
 			"GET /api/songs - 获取所有歌曲列表",

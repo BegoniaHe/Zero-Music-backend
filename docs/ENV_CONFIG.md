@@ -33,6 +33,26 @@ Zero-Music 后端支持通过环境变量覆盖配置文件中的设置。环境
 | `ZERO_MUSIC_DEBUG` | 是否启用调试模式（显示详细错误） | `false` | `true` / `false` | `ZERO_MUSIC_DEBUG=true` |
 | `LOG_LEVEL` | 日志级别 | `info` | `debug`, `info`, `warn`, `error`, `fatal` | `LOG_LEVEL=debug` |
 
+### 认证配置
+
+| 环境变量 | 说明 | 默认值 | 有效范围 | 示例 |
+|---------|------|--------|---------|------|
+| `ZERO_MUSIC_ENV` | 运行环境 | - | `production`, `development` | `ZERO_MUSIC_ENV=production` |
+| `ZERO_MUSIC_JWT_SECRET` | JWT 签名密钥 | 随机生成 | 任意字符串（建议32字符以上） | `ZERO_MUSIC_JWT_SECRET=your-secret-key` |
+| `ZERO_MUSIC_JWT_EXPIRE_HOURS` | JWT 过期时间（小时） | `168` (7天) | `1-8760` | `ZERO_MUSIC_JWT_EXPIRE_HOURS=24` |
+| `ZERO_MUSIC_ALLOW_REGISTER` | 是否允许注册 | `true` | `true` / `false` / `1` / `0` | `ZERO_MUSIC_ALLOW_REGISTER=false` |
+
+> ⚠️ **安全提示**：
+> - **生产环境**（`ZERO_MUSIC_ENV=production`）**必须**设置 `ZERO_MUSIC_JWT_SECRET`，否则应用将拒绝启动
+> - **开发环境**：如果未设置 JWT 密钥，系统会自动生成随机密钥（仅用于开发）
+> - JWT 密钥应使用安全的随机字符串，例如：`openssl rand -base64 32`
+
+### 数据库配置
+
+| 环境变量 | 说明 | 默认值 | 有效范围 | 示例 |
+|---------|------|--------|---------|------|
+| `ZERO_MUSIC_DATABASE_PATH` | SQLite 数据库文件路径 | `data/zero-music.db` | 任意有效路径 | `ZERO_MUSIC_DATABASE_PATH=/data/music.db` |
+
 ## 使用方法
 
 ### 方法一：直接设置环境变量
@@ -104,6 +124,9 @@ zero-music.exe -config config.json -log app.log
 ```bash
 #!/bin/bash
 
+# 运行环境
+export ZERO_MUSIC_ENV=production
+
 # 服务器配置
 export ZERO_MUSIC_SERVER_HOST=0.0.0.0
 export ZERO_MUSIC_SERVER_PORT=8080
@@ -120,6 +143,11 @@ export ZERO_MUSIC_CACHE_TTL_MINUTES=5
 
 # 音乐目录
 export ZERO_MUSIC_MUSIC_DIRECTORY=/data/music
+
+# 认证配置 - 生产环境必须设置
+export ZERO_MUSIC_JWT_SECRET="$(openssl rand -base64 32)"  # ⚠️ 请替换为固定的安全密钥
+export ZERO_MUSIC_JWT_EXPIRE_HOURS=168  # 7天
+export ZERO_MUSIC_ALLOW_REGISTER=false  # 生产环境建议关闭注册
 
 # 安全配置 - 生产环境必须设置
 export ZERO_MUSIC_DEBUG=false  # ⚠️ 禁用调试模式

@@ -26,11 +26,14 @@ const (
 var (
 	log        *logrus.Logger
 	loggerOnce sync.Once
+	loggerMu   sync.RWMutex // 保护 log 实例的并发访问
 )
 
 // ensureLogger 初始化全局日志实例（仅初始化一次）。
 func ensureLogger() {
 	loggerOnce.Do(func() {
+		loggerMu.Lock()
+		defer loggerMu.Unlock()
 		log = logrus.New()
 		log.SetFormatter(&logrus.JSONFormatter{
 			TimestampFormat: "2006-01-02 15:04:05",
@@ -75,8 +78,11 @@ func Init(logFilePath string) (io.Closer, error) {
 		Compress:   true,
 	}
 
+	// 使用写锁保护对 log 实例的修改
+	loggerMu.Lock()
 	log.SetOutput(io.MultiWriter(os.Stdout, rotateWriter))
 	log.SetLevel(parseLogLevel(os.Getenv("LOG_LEVEL")))
+	loggerMu.Unlock()
 
 	return rotateWriter, nil
 }

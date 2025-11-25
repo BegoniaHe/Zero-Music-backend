@@ -3,7 +3,6 @@ package handlers
 import (
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,35 +11,11 @@ import (
 	"zero-music/config"
 	"zero-music/logger"
 	"zero-music/middleware"
-	"zero-music/models"
 	"zero-music/services"
+	"zero-music/utils"
 
 	"github.com/gin-gonic/gin"
 )
-
-// getMimeType 根据文件扩展名返回对应的 MIME 类型。
-func getMimeType(filename string) string {
-	ext := strings.ToLower(filepath.Ext(filename))
-	mimeType := mime.TypeByExtension(ext)
-	if mimeType == "" {
-		// 为常见音频格式提供备选 MIME 类型
-		switch ext {
-		case ".mp3":
-			return "audio/mpeg"
-		case ".flac":
-			return "audio/flac"
-		case ".wav":
-			return "audio/wav"
-		case ".m4a":
-			return "audio/mp4"
-		case ".ogg":
-			return "audio/ogg"
-		default:
-			return "application/octet-stream"
-		}
-	}
-	return mimeType
-}
 
 // StreamHandler 负责处理音频流相关的 API 请求。
 type StreamHandler struct {
@@ -84,17 +59,7 @@ func (h *StreamHandler) StreamAudio(c *gin.Context) {
 	requestID := middleware.GetRequestID(c)
 
 	// 验证 ID 格式，确保是有效的 SHA256 哈希格式，防止路径遍历攻击。
-	if !models.ValidIDRegex.MatchString(id) {
-		logger.WithRequestID(requestID).Warnf("无效的歌曲 ID 格式: %s", id)
-		c.JSON(http.StatusBadRequest, NewBadRequestError("无效的歌曲 ID 格式"))
-		return
-	}
-
-	// 先执行扫描以确保缓存是最新的。
-	_, err := h.scanner.Scan(c.Request.Context())
-	if err != nil {
-		logger.WithRequestID(requestID).Errorf("扫描音乐文件失败: %v", err)
-		c.JSON(http.StatusInternalServerError, NewInternalError(err))
+	if !ValidateSongID(c, id) {
 		return
 	}
 
@@ -153,12 +118,18 @@ func (h *StreamHandler) StreamAudio(c *gin.Context) {
 
 	fileSize := fileInfo.Size()
 
-	// 记录访问日志。
-	logger.WithRequestID(requestID).WithFields(map[string]interface{}{
+	// 记录访问日志（非调试模式下不记录路径信息以保护隐私）。
+	logFields := map[string]interface{}{
 		"song_id":   id,
-		"file_path": cleanPath,
+		"file_name": filepath.Base(cleanPath),
 		"file_size": fileSize,
-	}).Info("音频流请求")
+	}
+	// 仅在调试模式下记录相对路径
+	if isDebugMode() {
+		relFilePath, _ := filepath.Rel(h.musicDirAbs, cleanPath)
+		logFields["rel_path"] = relFilePath
+	}
+	logger.WithRequestID(requestID).WithFields(logFields).Info("音频流请求")
 
 	// 处理 Range 请求以支持断点续传。
 	rangeHeader := c.GetHeader("Range")
@@ -168,7 +139,7 @@ func (h *StreamHandler) StreamAudio(c *gin.Context) {
 	}
 
 	// 为完整文件传输设置响应头。
-	mimeType := getMimeType(cleanPath)
+	mimeType := utils.GetAudioMimeType(cleanPath)
 	c.Header("Content-Type", mimeType)
 	c.Header("Content-Length", fmt.Sprintf("%d", fileSize))
 	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filepath.Base(cleanPath)))
@@ -232,7 +203,7 @@ func (h *StreamHandler) serveRange(c *gin.Context, file *os.File, fileSize int64
 	}
 
 	// 设置部分内容响应的头部。
-	mimeType := getMimeType(filename)
+	mimeType := utils.GetAudioMimeType(filename)
 	c.Header("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, fileSize))
 	c.Header("Content-Length", fmt.Sprintf("%d", contentLength))
 	c.Header("Content-Type", mimeType)

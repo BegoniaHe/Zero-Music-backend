@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"time"
 	"zero-music/config"
+	"zero-music/database"
 	"zero-music/handlers"
 	"zero-music/logger"
 	"zero-music/middleware"
+	"zero-music/repository"
 	"zero-music/services"
 
 	"github.com/gin-gonic/gin"
@@ -57,6 +59,65 @@ func ProvideScanner(cfg *config.Config) services.Scanner {
 	)
 }
 
+// ProvideDBManager 提供数据库管理器实例
+func ProvideDBManager(lc fx.Lifecycle, cfg *config.Config) (*database.DBManager, error) {
+	dbCfg := &database.DBConfig{
+		Driver: cfg.Database.Driver,
+		DSN:    cfg.Database.Path,
+	}
+
+	provider := database.NewSQLiteProvider()
+	dbManager := database.NewDBManager(provider, dbCfg)
+
+	// 连接数据库
+	if err := dbManager.Connect(); err != nil {
+		return nil, fmt.Errorf("连接数据库失败: %w", err)
+	}
+
+	// 注册生命周期钩子
+	lc.Append(fx.Hook{
+		OnStop: func(ctx context.Context) error {
+			logger.Info("正在关闭数据库连接...")
+			if err := dbManager.Close(); err != nil {
+				logger.Errorf("关闭数据库连接时出错: %v", err)
+			}
+			return nil
+		},
+	})
+
+	return dbManager, nil
+}
+
+// ProvideDB 提供数据库连接实例
+func ProvideDB(dbManager *database.DBManager) database.DB {
+	return dbManager.GetDB()
+}
+
+// ProvideJWTManager 提供JWT管理器实例
+func ProvideJWTManager(cfg *config.Config) *middleware.JWTManager {
+	return middleware.NewJWTManager(cfg.Auth.JWTSecret)
+}
+
+// ProvideUserRepository 提供用户仓储实例
+func ProvideUserRepository(db database.DB) repository.UserRepository {
+	return repository.NewSQLiteUserRepository(db)
+}
+
+// ProvideFavoriteRepository 提供收藏仓储实例
+func ProvideFavoriteRepository(db database.DB) repository.FavoriteRepository {
+	return repository.NewSQLiteFavoriteRepository(db)
+}
+
+// ProvidePlayStatsRepository 提供播放统计仓储实例
+func ProvidePlayStatsRepository(db database.DB) repository.PlayStatsRepository {
+	return repository.NewSQLitePlayStatsRepository(db)
+}
+
+// ProvidePlaylistRepository 提供播放列表仓储实例
+func ProvidePlaylistRepository(db database.DB) repository.PlaylistRepository {
+	return repository.NewSQLitePlaylistRepository(db)
+}
+
 // ProvidePlaylistHandler 提供播放列表处理器
 func ProvidePlaylistHandler(scanner services.Scanner) *handlers.PlaylistHandler {
 	return handlers.NewPlaylistHandler(scanner)
@@ -72,12 +133,37 @@ func ProvideSystemHandler(cfg *config.Config) *handlers.SystemHandler {
 	return handlers.NewSystemHandler(cfg)
 }
 
+// ProvideAuthHandler 提供认证处理器
+func ProvideAuthHandler(cfg *config.Config, userRepo repository.UserRepository, jwtManager *middleware.JWTManager) *handlers.AuthHandler {
+	expiration := time.Duration(cfg.Auth.JWTExpireHours) * time.Hour
+	return handlers.NewAuthHandler(expiration, userRepo, jwtManager)
+}
+
+// ProvideUserHandler 提供用户处理器
+func ProvideUserHandler(
+	scanner services.Scanner,
+	favoriteRepo repository.FavoriteRepository,
+	playStats repository.PlayStatsRepository,
+	playlistRepo repository.PlaylistRepository,
+) *handlers.UserHandler {
+	return handlers.NewUserHandler(scanner, favoriteRepo, playStats, playlistRepo)
+}
+
+// ProvideSearchHandler 提供搜索处理器
+func ProvideSearchHandler(scanner services.Scanner) *handlers.SearchHandler {
+	return handlers.NewSearchHandler(scanner)
+}
+
 // ProvideRouter 提供 Gin 路由器
 func ProvideRouter(
 	cfg *config.Config,
 	playlistHandler *handlers.PlaylistHandler,
 	streamHandler *handlers.StreamHandler,
 	systemHandler *handlers.SystemHandler,
+	authHandler *handlers.AuthHandler,
+	userHandler *handlers.UserHandler,
+	searchHandler *handlers.SearchHandler,
+	jwtManager *middleware.JWTManager,
 ) *gin.Engine {
 	router := gin.Default()
 
@@ -90,15 +176,62 @@ func ProvideRouter(
 	// API 根端点
 	router.GET("/", systemHandler.APIIndex)
 
-	// API 路由组
-	api := router.Group("/api")
+	// API v1 路由组
+	v1 := router.Group("/api/v1")
 	{
-		// 播放列表路由
-		api.GET("/songs", playlistHandler.GetAllSongs)
-		api.GET("/song/:id", playlistHandler.GetSongByID)
+		// 认证路由（公开）
+		auth := v1.Group("/auth")
+		{
+			auth.POST("/register", authHandler.Register)
+			auth.POST("/login", authHandler.Login)
+		}
 
-		// 音频流路由
-		api.GET("/stream/:id", streamHandler.StreamAudio)
+		// 播放列表路由（公开，可选认证）
+		v1.GET("/songs", playlistHandler.GetAllSongs)
+		v1.GET("/song/:id", playlistHandler.GetSongByID)
+
+		// 音频流路由（公开，可选认证）
+		v1.GET("/stream/:id", streamHandler.StreamAudio)
+
+		// 搜索和浏览路由（公开）
+		v1.GET("/search", searchHandler.Search)
+		v1.GET("/artists", searchHandler.GetArtists)
+		v1.GET("/artists/:name", searchHandler.GetArtistSongs)
+		v1.GET("/albums", searchHandler.GetAlbums)
+		v1.GET("/albums/:name", searchHandler.GetAlbumSongs)
+
+		// 需要认证的用户路由
+		user := v1.Group("/user")
+		user.Use(middleware.JWTAuth(jwtManager))
+		{
+			// 用户信息
+			user.GET("/profile", authHandler.GetProfile)
+			user.PUT("/profile", authHandler.UpdateProfile)
+			user.PUT("/password", authHandler.ChangePassword)
+			user.POST("/refresh-token", authHandler.RefreshToken)
+
+			// 收藏
+			user.GET("/favorites", userHandler.GetFavorites)
+			user.POST("/favorites/:id", userHandler.AddFavorite)
+			user.DELETE("/favorites/:id", userHandler.RemoveFavorite)
+			user.GET("/favorites/:id/check", userHandler.CheckFavorite)
+
+			// 播放历史和统计
+			user.POST("/play", userHandler.RecordPlay)
+			user.GET("/history", userHandler.GetPlayHistory)
+			user.GET("/stats", userHandler.GetUserStats)
+			user.GET("/play-stats", userHandler.GetPlayStats)
+
+			// 用户播放列表
+			user.GET("/playlists", userHandler.GetPlaylists)
+			user.POST("/playlists", userHandler.CreatePlaylist)
+			user.GET("/playlists/:id", userHandler.GetPlaylist)
+			user.PUT("/playlists/:id", userHandler.UpdatePlaylist)
+			user.DELETE("/playlists/:id", userHandler.DeletePlaylist)
+			user.POST("/playlists/:id/songs", userHandler.AddSongToPlaylist)
+			user.DELETE("/playlists/:id/songs/:songId", userHandler.RemoveSongFromPlaylist)
+			user.PUT("/playlists/:id/reorder", userHandler.ReorderPlaylistSongs)
+		}
 	}
 
 	return router
@@ -182,10 +315,22 @@ func main() {
 		fx.Provide(
 			ProvideParams,
 			ProvideConfig,
+			ProvideDBManager,
+			ProvideDB,
 			ProvideScanner,
+			ProvideJWTManager,
+			// Repository 层
+			ProvideUserRepository,
+			ProvideFavoriteRepository,
+			ProvidePlayStatsRepository,
+			ProvidePlaylistRepository,
+			// Handler 层
 			ProvidePlaylistHandler,
 			ProvideStreamHandler,
 			ProvideSystemHandler,
+			ProvideAuthHandler,
+			ProvideUserHandler,
+			ProvideSearchHandler,
 			ProvideRouter,
 			ProvideHTTPServer,
 		),

@@ -5,3 +5,9 @@ zero-music
 .vscode/
 
 *.log
+
+coverage.out
+
+.DS_Store
+
+data/

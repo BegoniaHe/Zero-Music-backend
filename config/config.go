@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,6 +21,15 @@ const (
 	DefaultIdleTimeoutSeconds     = 120
 	DefaultShutdownTimeoutSeconds = 30
 
+	// JWT 设置
+	DefaultJWTSecret      = "zero-music-secret-key-please-change-in-production"
+	DefaultJWTExpireHours = 24 * 7 // 7 天
+	DefaultDatabasePath   = "data/zero-music.db"
+
+	// 搜索设置
+	DefaultSearchLimit = 50
+	MaxSearchLimit     = 100
+
 	// 约束
 	MaxAllowedRangeSize              = 500 * 1024 * 1024
 	MaxAllowedCacheTTL               = 1440
@@ -28,8 +39,11 @@ const (
 
 // Config 定义了应用程序的所有配置项。
 type Config struct {
-	Server ServerConfig `json:"server"`
-	Music  MusicConfig  `json:"music"`
+	Server   ServerConfig   `json:"server"`
+	Music    MusicConfig    `json:"music"`
+	Auth     AuthConfig     `json:"auth"`
+	Database DatabaseConfig `json:"database"`
+	Search   SearchConfig   `json:"search"`
 }
 
 // ServerConfig 定义了服务器相关的配置。
@@ -48,6 +62,27 @@ type MusicConfig struct {
 	Directory        string   `json:"directory"`
 	SupportedFormats []string `json:"supported_formats"`
 	CacheTTLMinutes  int      `json:"cache_ttl_minutes"`
+}
+
+// AuthConfig 定义了认证相关的配置。
+type AuthConfig struct {
+	JWTSecret      string `json:"jwt_secret"`
+	JWTExpireHours int    `json:"jwt_expire_hours"`
+	AllowRegister  bool   `json:"allow_register"`
+}
+
+// DatabaseConfig 定义了数据库相关的配置。
+type DatabaseConfig struct {
+	Driver       string `json:"driver"` // sqlite3, mysql, postgres
+	Path         string `json:"path"`   // SQLite 文件路径或连接字符串
+	MaxOpenConns int    `json:"max_open_conns"`
+	MaxIdleConns int    `json:"max_idle_conns"`
+}
+
+// SearchConfig 定义了搜索相关的配置。
+type SearchConfig struct {
+	DefaultLimit int `json:"default_limit"`
+	MaxLimit     int `json:"max_limit"`
 }
 
 // Load 从指定路径加载配置文件，如果为空则返回默认配置。
@@ -109,6 +144,27 @@ func ensureDefaults(cfg *Config) {
 	if cfg.Music.Directory == "" {
 		cfg.Music.Directory = determineDefaultMusicDirectory()
 	}
+	// Auth 默认值
+	if cfg.Auth.JWTSecret == "" {
+		cfg.Auth.JWTSecret = DefaultJWTSecret
+	}
+	if cfg.Auth.JWTExpireHours <= 0 {
+		cfg.Auth.JWTExpireHours = DefaultJWTExpireHours
+	}
+	// Database 默认值
+	if cfg.Database.Driver == "" {
+		cfg.Database.Driver = "sqlite3"
+	}
+	if cfg.Database.Path == "" {
+		cfg.Database.Path = DefaultDatabasePath
+	}
+	// Search 默认值
+	if cfg.Search.DefaultLimit <= 0 {
+		cfg.Search.DefaultLimit = DefaultSearchLimit
+	}
+	if cfg.Search.MaxLimit <= 0 {
+		cfg.Search.MaxLimit = MaxSearchLimit
+	}
 }
 
 // applyEnvOverrides 使用环境变量覆盖配置。
@@ -141,6 +197,22 @@ func applyEnvOverrides(cfg *Config) {
 	if cacheTTL := parseEnvInt("ZERO_MUSIC_CACHE_TTL_MINUTES", 1, MaxAllowedCacheTTL); cacheTTL != nil {
 		cfg.Music.CacheTTLMinutes = *cacheTTL
 	}
+
+	// Auth 环境变量覆盖
+	if jwtSecret := os.Getenv("ZERO_MUSIC_JWT_SECRET"); jwtSecret != "" {
+		cfg.Auth.JWTSecret = jwtSecret
+	}
+	if jwtExpire := parseEnvInt("ZERO_MUSIC_JWT_EXPIRE_HOURS", 1, 24*365); jwtExpire != nil {
+		cfg.Auth.JWTExpireHours = *jwtExpire
+	}
+	if allowRegister := os.Getenv("ZERO_MUSIC_ALLOW_REGISTER"); allowRegister != "" {
+		cfg.Auth.AllowRegister = allowRegister == "true" || allowRegister == "1"
+	}
+
+	// Database 环境变量覆盖
+	if dbPath := os.Getenv("ZERO_MUSIC_DATABASE_PATH"); dbPath != "" {
+		cfg.Database.Path = dbPath
+	}
 }
 
 func parseEnvInt(key string, min, max int) *int {
@@ -160,6 +232,21 @@ func parseEnvInt(key string, min, max int) *int {
 
 // validateConfig 验证配置合法性。
 func validateConfig(cfg *Config) error {
+	// 安全检查：生产环境必须配置自定义 JWT 密钥
+	if cfg.Auth.JWTSecret == DefaultJWTSecret {
+		if os.Getenv("ZERO_MUSIC_ENV") == "production" {
+			return fmt.Errorf("生产环境必须设置自定义 JWT 密钥，请设置环境变量 ZERO_MUSIC_JWT_SECRET")
+		}
+		// 非生产环境：生成随机密钥替代默认值
+		randomSecret, err := generateRandomSecret(32)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "[警告] 无法生成随机 JWT 密钥，使用默认值。请勿在生产环境使用")
+		} else {
+			cfg.Auth.JWTSecret = randomSecret
+			fmt.Fprintln(os.Stderr, "[提示] 已生成随机 JWT 密钥，仅用于开发环境。生产环境请设置 ZERO_MUSIC_JWT_SECRET")
+		}
+	}
+
 	if cfg.Server.Port < 1 || cfg.Server.Port > 65535 {
 		return fmt.Errorf("端口必须在 1-65535 范围内，当前值: %d", cfg.Server.Port)
 	}
@@ -250,6 +337,28 @@ func GetDefaultConfig() *Config {
 			SupportedFormats: []string{".mp3", ".flac", ".wav", ".m4a", ".ogg"},
 			CacheTTLMinutes:  DefaultCacheTTLMinutes,
 		},
+		Auth: AuthConfig{
+			JWTSecret:      DefaultJWTSecret,
+			JWTExpireHours: DefaultJWTExpireHours,
+			AllowRegister:  true,
+		},
+		Database: DatabaseConfig{
+			Driver: "sqlite3",
+			Path:   DefaultDatabasePath,
+		},
+		Search: SearchConfig{
+			DefaultLimit: DefaultSearchLimit,
+			MaxLimit:     MaxSearchLimit,
+		},
 	}
 	return cfg
+}
+
+// generateRandomSecret 生成指定长度的随机密钥（Base64 编码）
+func generateRandomSecret(length int) (string, error) {
+	bytes := make([]byte, length)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(bytes), nil
 }
